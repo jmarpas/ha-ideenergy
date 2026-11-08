@@ -28,7 +28,7 @@ import aiohttp
 import ideenergy
 from homeassistant.core import HomeAssistant, dt_util
 from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant_historical_sensor import HistoricalState
 
 from .const import LOCAL_TZ, UPDATE_INTERVAL
@@ -243,6 +243,20 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         dsstr = ", ".join(ds.name for ds in active)
         LOGGER.debug(f"[{self._client}] datasets enabled: {dsstr}")
 
+        data = await self._async_refresh_datasets(active)
+
+        # Entities become unavailable while every active dataset is failing
+        # (including cycles where they are skipped because of the backoff).
+        if active and all(self.consecutive_failures(ds) > 0 for ds in active):
+            raise UpdateFailed(
+                f"[{self._client}] all active datasets are failing: {dsstr}"
+            )
+
+        return data
+
+    async def _async_refresh_datasets(
+        self, active: list[IDeEnergyCoordinatorDataSet]
+    ) -> IDeEnergyDataCoordinatorData:
         due = [ds for ds in active if self.is_dataset_due(ds)]
         if not due:
             LOGGER.debug(f"[{self._client}] no dataset due, skipping i-DE requests")
