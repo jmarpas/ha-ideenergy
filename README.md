@@ -19,6 +19,23 @@ This integration requires an **advanced** user profile on i-DE website.
 **⚠️ Make sure to read the '[FAQ](https://github.com/ldotlopez/ha-ideenergy/blob/main/FAQ.md)', 'Dependencies' and 'Warning' sections**
 
 
+> [!NOTE]
+> **This is the `jmarpas` fork** of [ldotlopez/ha-ideenergy](https://github.com/ldotlopez/ha-ideenergy)
+> (GPL-2.0-or-later, original author Luis López). It adds stability fixes for the
+> mass HTTP 403 errors caused by ideenergy 2.0.1.dev3 never re-logging in: 13-minute
+> session timeout, re-login + single retry on 401/403, per-dataset exponential backoff
+> (5 min → 30 min → 2 h → 6 h), reauth flow and masked email in logs.
+> See [docs/fork-phase1-diagnosis.md](docs/fork-phase1-diagnosis.md).
+>
+> **Install the fork with HACS** (requires Home Assistant 2026.3.0 or newer):
+>
+> 1. HACS → ⋮ → *Custom repositories* → URL `https://github.com/jmarpas/ha-ideenergy`, type *Integration*.
+> 2. If the upstream integration is installed from HACS, remove that HACS repository first
+>    (**do not delete the integration entry** in *Settings → Devices & services*). The
+>    domain (`ideenergy`) and entity unique_ids are the same, so statistics history is kept.
+> 3. Download the fork (enable *Show beta versions* to see `v3.0.0a3-jaime.*` pre-releases) and restart HA.
+> 4. On start, HA installs `ideenergy` from GitHub (commit `f7b3118`), so internet access to github.com is needed.
+
 ## Features
 
 * Integration with the Home Assistant Energy Panel.

@@ -18,6 +18,23 @@ Require de un usuario **avanzado** en la página web del distribuidor.
 
 **⚠️ Asegurese de leer la [FAQ](https://github.com/ldotlopez/ha-ideenergy/blob/main/FAQ.md)' y las secciones 'advertencias' y 'dependencias'.**
 
+> [!NOTE]
+> **Este es el fork `jmarpas`** de [ldotlopez/ha-ideenergy](https://github.com/ldotlopez/ha-ideenergy)
+> (GPL-2.0-or-later, autor original Luis López). Añade arreglos de estabilidad para los
+> 403 masivos causados porque ideenergy 2.0.1.dev3 nunca vuelve a hacer login: timeout
+> de sesión de 13 min, re-login + un reintento ante 401/403, backoff exponencial por
+> dataset (5 min → 30 min → 2 h → 6 h), flujo de reautenticación y email enmascarado en logs.
+> Ver [docs/fork-phase1-diagnosis.md](docs/fork-phase1-diagnosis.md).
+>
+> **Instalar el fork con HACS** (requiere Home Assistant 2026.3.0 o superior):
+>
+> 1. HACS → ⋮ → *Repositorios personalizados* → URL `https://github.com/jmarpas/ha-ideenergy`, tipo *Integración*.
+> 2. Si tienes la integración original instalada desde HACS, elimina antes ese repositorio de HACS
+>    (**no borres la integración** en *Ajustes → Dispositivos y servicios*). El dominio
+>    (`ideenergy`) y los unique_id de las entidades son los mismos, así que se conserva el histórico.
+> 3. Descarga el fork (activa *Mostrar versiones beta* para ver las pre-releases `v3.0.0a3-jaime.*`) y reinicia HA.
+> 4. Al arrancar, HA instala `ideenergy` desde GitHub (commit `f7b3118`), por lo que necesita acceso a github.com.
+
 ## Características
 
 * Integración con el panel del energía de Home Assistant

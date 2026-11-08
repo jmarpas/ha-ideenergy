@@ -11,13 +11,13 @@
   "dependencies": [
     "statistics"
   ],
-  "documentation": "https://github.com/ldotlopez/ha-ideenergy",
+  "documentation": "https://github.com/jmarpas/ha-ideenergy",
   "integration_type": "device",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/ldotlopez/ha-ideenergy/issues",
+  "issue_tracker": "https://github.com/jmarpas/ha-ideenergy/issues",
   "requirements": [
     "ideenergy@https://github.com/ldotlopez/ideenergy/archive/f7b3118635a828e51dd41a52d238be87802e607f.zip",
     "homeassistant-historical-sensor==3.0.0a4"
   ],
-  "version": "3.0.0a1"
+  "version": "3.0.0a3+jaime.1"
 }
