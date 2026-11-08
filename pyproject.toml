@@ -14,7 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.14.2"
 
 [tool.black]
 target-version = ['py314']
@@ -35,3 +35,13 @@ dev = [
     "ipython>=9.12.0",
     "pre-commit>=4.5.1",
 ]
+test = [
+    "homeassistant-historical-sensor==3.0.0a4",
+    "ideenergy @ https://github.com/ldotlopez/ideenergy/archive/f7b3118635a828e51dd41a52d238be87802e607f.zip",
+    "pytest-homeassistant-custom-component>=0.13.375",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
