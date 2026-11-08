@@ -17,6 +17,7 @@
 
 
 import os
+from collections.abc import Mapping
 from logging import getLogger
 from typing import Any
 
@@ -28,6 +29,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .const import CONF_CONTRACT, CONFIG_ENTRY_VERSION, DOMAIN
+from .coordinator import AUTH_LOGIN_ERRORS, DATASET_FETCH_ERRORS
 
 LOGGER = getLogger(__name__)
 
@@ -41,6 +43,8 @@ AUTH_SCHEMA = vol.Schema(
         ): str,
     }
 )
+
+REAUTH_SCHEMA = vol.Schema({vol.Required(CONF_PASSWORD): str})
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
@@ -70,8 +74,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
             try:
                 self.api = await create_api(self.hass, username, password)
 
-            except ideenergy.ClientError:
+            except AUTH_LOGIN_ERRORS:
                 errors["base"] = "invalid_auth"
+
+            except DATASET_FETCH_ERRORS:
+                errors["base"] = "cannot_connect"
 
             except Exception:  # pylint: disable=broad-except
                 LOGGER.exception("Unexpected exception")
@@ -112,6 +119,47 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
 
         title = "CUPS " + contract["cups"]
         return self.async_create_entry(title=title, data=self.info)
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Start reauth when i-DE rejects the stored credentials."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for a new password and validate it against i-DE."""
+        reauth_entry = self._get_reauth_entry()
+        username = reauth_entry.data[CONF_USERNAME]
+        errors = {}
+
+        if user_input is not None:
+            password = user_input[CONF_PASSWORD]
+            try:
+                await create_api(self.hass, username, password)
+
+            except AUTH_LOGIN_ERRORS:
+                errors["base"] = "invalid_auth"
+
+            except DATASET_FETCH_ERRORS:
+                errors["base"] = "cannot_connect"
+
+            except Exception:  # pylint: disable=broad-except
+                LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
+
+            else:
+                return self.async_update_reload_and_abort(
+                    reauth_entry, data_updates={CONF_PASSWORD: password}
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=REAUTH_SCHEMA,
+            errors=errors,
+            description_placeholders={CONF_USERNAME: username},
+        )
 
 
 # class OptionsFlowHandler(config_entries.OptionsFlow):

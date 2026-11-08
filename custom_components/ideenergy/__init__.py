@@ -20,15 +20,20 @@ import logging
 import os
 
 import ideenergy
-from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.loader import async_get_loaded_integration
 
 from .const import CONF_CONTRACT, DOMAIN, SESSION_TIMEOUT_OVERRIDE, UPDATE_INTERVAL
-from .coordinator import IDeEnergyDataCoordinator
+from .coordinator import (
+    AUTH_LOGIN_ERRORS,
+    DATASET_FETCH_ERRORS,
+    IDeEnergyDataCoordinator,
+)
 from .data import IntegrationIDeEnergyConfigEntry, IntegrationIDeEnergyRunTimeData
 from .store import IDeEnergyConfigEntryState
 
@@ -55,10 +60,16 @@ async def async_setup_entry(
     client = get_i_de_energy_api(hass, entry)
 
     try:
+        await client.login()
+    except AUTH_LOGIN_ERRORS as e:
+        raise ConfigEntryAuthFailed(f"i-DE rejected the credentials: {e}") from e
+    except DATASET_FETCH_ERRORS as e:
+        raise ConfigEntryNotReady(f"i-DE is not responding: {e}") from e
+
+    try:
         contract_details = await client.get_contract_details()
-    except ideenergy.ClientError as e:
-        LOGGER.debug(f"Unable to initialize integration: {e}")
-        return False
+    except DATASET_FETCH_ERRORS as e:
+        raise ConfigEntryNotReady(f"Unable to get contract details: {e}") from e
 
     device_info = get_i_de_energy_device_info(contract_details)
 

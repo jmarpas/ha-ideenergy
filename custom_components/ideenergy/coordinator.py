@@ -27,6 +27,7 @@ from typing import Any
 import aiohttp
 import ideenergy
 from homeassistant.core import HomeAssistant, dt_util
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant_historical_sensor import HistoricalState
 
@@ -82,6 +83,9 @@ BACKOFF_DELAYS: tuple[timedelta, ...] = (
 
 # HTTP statuses that mean "session is no longer valid on i-DE side"
 AUTH_ERROR_STATUSES = frozenset({401, 403})
+
+# Errors raised by Client.login() when i-DE rejects the credentials
+AUTH_LOGIN_ERRORS = (ideenergy.CommandError, ideenergy.UserExpiredError)
 
 # Errors that make a single dataset fetch fail without aborting the cycle
 DATASET_FETCH_ERRORS = (ideenergy.ClientError, aiohttp.ClientError, TimeoutError)
@@ -242,6 +246,16 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         due = [ds for ds in active if self.is_dataset_due(ds)]
         if not due:
             LOGGER.debug(f"[{self._client}] no dataset due, skipping i-DE requests")
+            return self.data
+
+        # Rejected credentials raise ConfigEntryAuthFailed (-> reauth flow).
+        # Any other login problem counts as a failure for every due dataset.
+        try:
+            await self._async_ensure_logged()
+        except DATASET_FETCH_ERRORS as e:
+            LOGGER.warning(f"[{self._client}] unable to log in: {e}")
+            for ds in due:
+                await self._async_record_failure(ds)
             return self.data
 
         # Only touch i-DE when some request is going to be performed.
@@ -429,8 +443,19 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
             )
 
         self._client._login_ts = None
-        await self._client.login()
+        await self._async_login()
         return await afn(*args, **kwargs)
+
+    async def _async_ensure_logged(self) -> None:
+        if not self._client.is_logged:
+            await self._async_login()
+
+    async def _async_login(self) -> None:
+        """Log in, translating rejected credentials into ConfigEntryAuthFailed."""
+        try:
+            await self._client.login()
+        except AUTH_LOGIN_ERRORS as e:
+            raise ConfigEntryAuthFailed(f"i-DE rejected the credentials: {e}") from e
 
     #
     # Helpers

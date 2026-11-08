@@ -1,7 +1,8 @@
 {
   "config": {
     "abort": {
-      "already_configured": "Device is already configured"
+      "already_configured": "Device is already configured",
+      "reauth_successful": "Re-authentication was successful"
     },
     "error": {
       "cannot_connect": "Failed to connect",
@@ -9,6 +10,18 @@
       "unknown": "Unexpected error"
     },
     "step": {
+      "contract": {
+        "data": {
+          "contract": "Contract"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate integration",
+        "description": "i-DE rejected the stored credentials for {username}. Enter the current password.",
+        "data": {
+          "password": "Password"
+        }
+      },
       "user": {
         "data": {
           "name": "Name",
