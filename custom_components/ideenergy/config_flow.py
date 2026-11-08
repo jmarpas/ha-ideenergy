@@ -62,12 +62,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
         errors = {}
 
         if user_input is not None:
-            # Not used correctly, check
-            # https://developers.home-assistant.io/docs/config_entries_config_flow_handler/#unique-ids
-            #
-            # await self.async_set_unique_id(user_input[CONF_NAME])
-            # self._abort_if_unique_id_configured()
-
+            # unique_id (CUPS) is set in async_step_contract
             username = user_input[CONF_USERNAME]
             password = user_input[CONF_PASSWORD]
 
@@ -111,6 +106,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
             return self.async_show_form(step_id="contract", data_schema=schema)
 
         contract = contracts[user_input["contract"]]
+
+        # One config entry per supply point (CUPS)
+        await self.async_set_unique_id(contract["cups"])
+        self._abort_if_unique_id_configured()
+
         self.info.update(
             {
                 CONF_CONTRACT: contract["codContrato"],

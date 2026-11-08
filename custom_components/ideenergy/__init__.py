@@ -22,7 +22,7 @@ import os
 import ideenergy
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
@@ -72,6 +72,7 @@ async def async_setup_entry(
         raise ConfigEntryNotReady(f"Unable to get contract details: {e}") from e
 
     device_info = get_i_de_energy_device_info(contract_details)
+    async_backfill_entry_unique_id(hass, entry, contract_details["cups"])
 
     ##
     # Setup config entry state
@@ -159,6 +160,29 @@ def get_i_de_energy_api(hass: HomeAssistant, entry: ConfigEntry):
 def apply_session_timeout_workaround(client: ideenergy.Client) -> None:
     """Force a sane local session timeout (see const.SESSION_TIMEOUT_OVERRIDE)."""
     client._session_timeout = SESSION_TIMEOUT_OVERRIDE
+
+
+@callback
+def async_backfill_entry_unique_id(
+    hass: HomeAssistant, entry: ConfigEntry, cups: str
+) -> None:
+    """Set the CUPS as unique_id on entries created before it was used.
+
+    Only the config entry unique_id is touched; entity unique_ids (and so the
+    statistics history) are unchanged.
+    """
+    if entry.unique_id is not None:
+        return
+
+    if any(
+        other.unique_id == cups
+        for other in hass.config_entries.async_entries(DOMAIN)
+        if other.entry_id != entry.entry_id
+    ):
+        LOGGER.warning(f"Another {DOMAIN} entry already uses CUPS {cups}")
+        return
+
+    hass.config_entries.async_update_entry(entry, unique_id=cups)
 
 
 def get_i_de_energy_device_info(contract_details):
