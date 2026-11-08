@@ -33,7 +33,7 @@ This integration requires an **advanced** user profile on i-DE website.
 > 2. If the upstream integration is installed from HACS, remove that HACS repository first
 >    (**do not delete the integration entry** in *Settings → Devices & services*). The
 >    domain (`ideenergy`) and entity unique_ids are the same, so statistics history is kept.
-> 3. Download the fork (enable *Show beta versions* to see `v3.0.0a3-jaime.*` pre-releases) and restart HA.
+> 3. Download the latest release (`v3.0.0a3-jaime.*`) and restart HA.
 > 4. On start, HA installs `ideenergy` from GitHub (commit `f7b3118`), so internet access to github.com is needed.
 
 ## Features

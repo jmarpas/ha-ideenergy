@@ -32,7 +32,7 @@ Require de un usuario **avanzado** en la página web del distribuidor.
 > 2. Si tienes la integración original instalada desde HACS, elimina antes ese repositorio de HACS
 >    (**no borres la integración** en *Ajustes → Dispositivos y servicios*). El dominio
 >    (`ideenergy`) y los unique_id de las entidades son los mismos, así que se conserva el histórico.
-> 3. Descarga el fork (activa *Mostrar versiones beta* para ver las pre-releases `v3.0.0a3-jaime.*`) y reinicia HA.
+> 3. Descarga la última release (`v3.0.0a3-jaime.*`) y reinicia HA.
 > 4. Al arrancar, HA instala `ideenergy` desde GitHub (commit `f7b3118`), por lo que necesita acceso a github.com.
 
 ## Características
