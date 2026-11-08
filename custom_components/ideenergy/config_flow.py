@@ -28,6 +28,7 @@ from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
+from .client import Client
 from .const import CONF_CONTRACT, CONFIG_ENTRY_VERSION, DOMAIN
 from .coordinator import AUTH_LOGIN_ERRORS, DATASET_FETCH_ERRORS
 
@@ -178,7 +179,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
 
 async def create_api(hass, username, password):
     sess = async_create_clientsession(hass)
-    client = ideenergy.Client(sess, username, password)
+    client = Client(sess, username, password)
 
     await client.login()
     return client

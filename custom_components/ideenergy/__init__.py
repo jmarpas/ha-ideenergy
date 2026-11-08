@@ -28,6 +28,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.loader import async_get_loaded_integration
 
+from .client import Client, MockClient
 from .const import CONF_CONTRACT, DOMAIN, SESSION_TIMEOUT_OVERRIDE, UPDATE_INTERVAL
 from .coordinator import (
     AUTH_LOGIN_ERRORS,
@@ -143,9 +144,9 @@ async def async_reload_entry(
 def get_i_de_energy_api(hass: HomeAssistant, entry: ConfigEntry):
 
     if bool(os.environ.get("HASS_I_DE_MOCK", "")):
-        ClientCls = ideenergy.MockClient
+        ClientCls = MockClient
     else:
-        ClientCls = ideenergy.Client
+        ClientCls = Client
 
     client = ClientCls(
         session=async_get_clientsession(hass),
