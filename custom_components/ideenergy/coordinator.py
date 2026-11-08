@@ -239,15 +239,24 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         dsstr = ", ".join(ds.name for ds in active)
         LOGGER.debug(f"[{self._client}] datasets enabled: {dsstr}")
 
-        await self._async_call_with_reauth(self._client.renew_session)
-        LOGGER.info(f"[{self._client}] session renewed")
+        due = [ds for ds in active if self.is_dataset_due(ds)]
+        if not due:
+            LOGGER.debug(f"[{self._client}] no dataset due, skipping i-DE requests")
+            return self.data
+
+        # Only touch i-DE when some request is going to be performed.
+        # A failed keep-alive is not fatal: datasets will record their own
+        # failures (and back off) if the session is really broken. Aborting
+        # here would bypass the backoff and hammer i-DE every cycle.
+        try:
+            await self._async_call_with_reauth(self._client.renew_session)
+        except DATASET_FETCH_ERRORS as e:
+            LOGGER.warning(f"[{self._client}] unable to renew session: {e}")
+        else:
+            LOGGER.info(f"[{self._client}] session renewed")
 
         updated_data = {}
-        for ds in active:
-            if not self.is_dataset_due(ds):
-                LOGGER.debug(f"[{self._client}] {ds.name}: dataset was not refreshed")
-                continue
-
+        for ds in due:
             try:
                 updated_data[ds] = await self._async_fetch_dataset(ds)
             except DATASET_FETCH_ERRORS as e:
