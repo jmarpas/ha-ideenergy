@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import contextlib
 import enum
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from logging import getLogger
+from typing import Any
 
 import ideenergy
 from homeassistant.core import HomeAssistant, dt_util
@@ -63,6 +64,17 @@ MEASURE_ACCUMULATED_KEY = "measure_accumulated"
 MEASURE_INSTANT_KEY = "measure_instant"
 
 HISTORICAL_PERIOD_LENGHT = timedelta(days=7)
+
+# HTTP statuses that mean "session is no longer valid on i-DE side"
+AUTH_ERROR_STATUSES = frozenset({401, 403})
+
+
+def is_auth_error(exc: BaseException) -> bool:
+    """Check if exception is an HTTP 401/403 from the i-DE API."""
+    if not isinstance(exc, ideenergy.RequestFailedError):
+        return False
+
+    return getattr(exc.response, "status", None) in AUTH_ERROR_STATUSES
 
 
 ##
@@ -165,7 +177,7 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
             IDeEnergyCoordinatorDataSet.POWER_DEMAND_PEAKS: self._async_get_power_demand_peaks,
             IDeEnergyCoordinatorDataSet.DIRECT_READING: self._async_get_direct_reading_data,
         }
-        await self._client.renew_session()
+        await self._async_call_with_reauth(self._client.renew_session)
         LOGGER.info(f"[{self._client}] session renewed")
 
         for ds, fn in fns.items():
@@ -206,7 +218,7 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
             success_key=DIRECT_READING_LAST_SUCCESS_STORED_STATE_KEY,
             attempt_key=DIRECT_READING_LAST_ATTEMPT_STORED_STATE_KEY,
         ):
-            data = await self._client.get_measure()
+            data = await self._async_call_with_reauth(self._client.get_measure)
 
         return {
             MEASURE_ACCUMULATED_KEY: data.accumulate,
@@ -250,7 +262,9 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
                 LOGGER.exception(f"[{self._client}] invalid DemandAtInstant '{dai!r}'")
                 return None
 
-        data = await self._client.get_historical_power_demand()
+        data = await self._async_call_with_reauth(
+            self._client.get_historical_power_demand
+        )
         hist_states = [
             historical_power_demand_as_historical_state(dai) for dai in data.demands
         ]
@@ -289,7 +303,7 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
             success_key=last_success_state_key,
             attempt_key=last_attempt_state_key,
         ):
-            data = await afn(start=start, end=end)
+            data = await self._async_call_with_reauth(afn, start=start, end=end)
 
         def as_historical_state(
             pv: ideenergy.PeriodValue,
@@ -310,6 +324,29 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         hist_states = [as_historical_state(pv) for pv in data.periods]
         hist_states = [hs for hs in hist_states if hs is not None]
         return hist_states
+
+    async def _async_call_with_reauth[R](
+        self, afn: Callable[..., Awaitable[R]], *args: Any, **kwargs: Any
+    ) -> R:
+        """Call an API method; on HTTP 401/403 re-login and retry exactly once.
+
+        i-DE silently expires sessions server-side. When that happens every
+        request answers 401/403 until a new login is performed.
+        """
+        try:
+            return await afn(*args, **kwargs)
+        except ideenergy.RequestFailedError as e:
+            if not is_auth_error(e):
+                raise
+
+            LOGGER.warning(
+                f"[{self._client}] got HTTP {e.response.status}, "
+                + "invalidating session and retrying once after re-login"
+            )
+
+        self._client._login_ts = None
+        await self._client.login()
+        return await afn(*args, **kwargs)
 
     async def _async_save_state_timestamp(
         self, key: str, timestamp: float | None = None
