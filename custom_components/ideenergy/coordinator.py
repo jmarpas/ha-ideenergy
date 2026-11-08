@@ -17,13 +17,14 @@
 
 from __future__ import annotations
 
-import contextlib
 import enum
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from logging import getLogger
+from logging import DEBUG, getLogger
 from typing import Any
 
+import aiohttp
 import ideenergy
 from homeassistant.core import HomeAssistant, dt_util
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -34,11 +35,13 @@ from .store import IDeEnergyConfigEntryState
 
 LOGGER = getLogger(__name__)
 
+# Stored state keys. Names are kept from previous versions so persisted
+# timestamps keep being honored after upgrading.
+
 # Direct reading (accumulated consumption, instant demand)
 DIRECT_READING_LAST_SUCCESS_STORED_STATE_KEY = "direct_reading_last_success"
 DIRECT_READING_LAST_ATTEMPT_STORED_STATE_KEY = "direct_reading_last_attempt"
 DIRECT_READING_LAST_SUCCESS_MAX_AGE = timedelta(hours=6)
-DIRECT_READING_LAST_ATTEMPT_MAX_AGE = timedelta(minutes=5)
 
 # Historical consumption
 HISTORICAL_CONSUMPTION_LAST_SUCCESS_STORED_STATE_KEY = (
@@ -48,7 +51,6 @@ HISTORICAL_CONSUMPTION_LAST_ATTEMPT_STORED_STATE_KEY = (
     "historical_consumption_last_attempt"
 )
 HISTORICAL_CONSUMPTION_LAST_SUCCESS_MAX_AGE = timedelta(hours=12)
-HISTORICAL_CONSUMPTION_LAST_ATTEMPT_MAX_AGE = timedelta(minutes=5)
 
 # Historical Generation
 HISTORICAL_GENERATION_LAST_SUCCESS_STORED_STATE_KEY = (
@@ -58,15 +60,31 @@ HISTORICAL_GENERATION_LAST_ATTEMPT_STORED_STATE_KEY = (
     "historical_generation_last_attempt"
 )
 HISTORICAL_GENERATION_LAST_SUCCESS_MAX_AGE = timedelta(hours=12)
-HISTORICAL_GENERATION_LAST_ATTEMPT_MAX_AGE = timedelta(minutes=5)
+
+# Power demand peaks
+POWER_DEMAND_PEAKS_LAST_SUCCESS_STORED_STATE_KEY = "power_demand_peaks_last_success"
+POWER_DEMAND_PEAKS_LAST_ATTEMPT_STORED_STATE_KEY = "power_demand_peaks_last_attempt"
+POWER_DEMAND_PEAKS_LAST_SUCCESS_MAX_AGE = timedelta(hours=12)
 
 MEASURE_ACCUMULATED_KEY = "measure_accumulated"
 MEASURE_INSTANT_KEY = "measure_instant"
 
 HISTORICAL_PERIOD_LENGHT = timedelta(days=7)
 
+# Wait time before retrying a dataset after N consecutive failures:
+# 1 failure -> 5 min, 2 -> 30 min, 3 -> 2 h, 4 or more -> 6 h
+BACKOFF_DELAYS: tuple[timedelta, ...] = (
+    timedelta(minutes=5),
+    timedelta(minutes=30),
+    timedelta(hours=2),
+    timedelta(hours=6),
+)
+
 # HTTP statuses that mean "session is no longer valid on i-DE side"
 AUTH_ERROR_STATUSES = frozenset({401, 403})
+
+# Errors that make a single dataset fetch fail without aborting the cycle
+DATASET_FETCH_ERRORS = (ideenergy.ClientError, aiohttp.ClientError, TimeoutError)
 
 
 def is_auth_error(exc: BaseException) -> bool:
@@ -77,6 +95,15 @@ def is_auth_error(exc: BaseException) -> bool:
     return getattr(exc.response, "status", None) in AUTH_ERROR_STATUSES
 
 
+def backoff_delay(consecutive_failures: int) -> timedelta | None:
+    """Delay to wait before the next attempt, None if there is no failure."""
+    if consecutive_failures <= 0:
+        return None
+
+    idx = min(consecutive_failures, len(BACKOFF_DELAYS)) - 1
+    return BACKOFF_DELAYS[idx]
+
+
 ##
 # IDeEnergyCoordinatorDataSet: types of data that can be registered in the
 # coordinator to be fetched
@@ -85,6 +112,53 @@ class IDeEnergyCoordinatorDataSet(enum.Enum):
     HISTORICAL_CONSUMPTION = enum.auto()
     HISTORICAL_GENERATION = enum.auto()
     POWER_DEMAND_PEAKS = enum.auto()
+
+
+@dataclass(frozen=True)
+class DatasetPolicy:
+    """Refresh policy for a dataset."""
+
+    last_success_key: str
+    last_attempt_key: str
+    success_max_age: timedelta
+
+    @property
+    def consecutive_failures_key(self) -> str:
+        return self.last_attempt_key.removesuffix("_last_attempt") + (
+            "_consecutive_failures"
+        )
+
+
+DATASET_POLICIES: dict[IDeEnergyCoordinatorDataSet, DatasetPolicy] = {
+    IDeEnergyCoordinatorDataSet.DIRECT_READING: DatasetPolicy(
+        last_success_key=DIRECT_READING_LAST_SUCCESS_STORED_STATE_KEY,
+        last_attempt_key=DIRECT_READING_LAST_ATTEMPT_STORED_STATE_KEY,
+        success_max_age=DIRECT_READING_LAST_SUCCESS_MAX_AGE,
+    ),
+    IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION: DatasetPolicy(
+        last_success_key=HISTORICAL_CONSUMPTION_LAST_SUCCESS_STORED_STATE_KEY,
+        last_attempt_key=HISTORICAL_CONSUMPTION_LAST_ATTEMPT_STORED_STATE_KEY,
+        success_max_age=HISTORICAL_CONSUMPTION_LAST_SUCCESS_MAX_AGE,
+    ),
+    IDeEnergyCoordinatorDataSet.HISTORICAL_GENERATION: DatasetPolicy(
+        last_success_key=HISTORICAL_GENERATION_LAST_SUCCESS_STORED_STATE_KEY,
+        last_attempt_key=HISTORICAL_GENERATION_LAST_ATTEMPT_STORED_STATE_KEY,
+        success_max_age=HISTORICAL_GENERATION_LAST_SUCCESS_MAX_AGE,
+    ),
+    IDeEnergyCoordinatorDataSet.POWER_DEMAND_PEAKS: DatasetPolicy(
+        last_success_key=POWER_DEMAND_PEAKS_LAST_SUCCESS_STORED_STATE_KEY,
+        last_attempt_key=POWER_DEMAND_PEAKS_LAST_ATTEMPT_STORED_STATE_KEY,
+        success_max_age=POWER_DEMAND_PEAKS_LAST_SUCCESS_MAX_AGE,
+    ),
+}
+
+# Fetch order inside a refresh cycle
+DATASET_FETCH_ORDER = (
+    IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION,
+    IDeEnergyCoordinatorDataSet.HISTORICAL_GENERATION,
+    IDeEnergyCoordinatorDataSet.POWER_DEMAND_PEAKS,
+    IDeEnergyCoordinatorDataSet.DIRECT_READING,
+)
 
 
 ##
@@ -112,6 +186,12 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
 
         self._client = client
         self._config_entry_state = config_entry_state
+        self._fetchers: dict[IDeEnergyCoordinatorDataSet, Callable[[], Awaitable]] = {
+            IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION: self._async_fetch_historical_consumption,
+            IDeEnergyCoordinatorDataSet.HISTORICAL_GENERATION: self._async_fetch_historical_generation,
+            IDeEnergyCoordinatorDataSet.POWER_DEMAND_PEAKS: self._async_fetch_power_demand_peaks,
+            IDeEnergyCoordinatorDataSet.DIRECT_READING: self._async_fetch_direct_reading,
+        }
 
     def activate_dataset(self, dataset: IDeEnergyCoordinatorDataSet) -> None:
         self.dataset_counter[dataset.name] += 1
@@ -136,6 +216,9 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         if self.dataset_counter[dataset.name] == 0:
             LOGGER.info(f"[{self._client}] dataset {dataset.name} disabled")
 
+    def active_datasets(self) -> list[IDeEnergyCoordinatorDataSet]:
+        return [ds for ds in DATASET_FETCH_ORDER if self.dataset_counter[ds.name] > 0]
+
     async def _async_setup(self) -> None:
         """Set up the coordinator
 
@@ -145,118 +228,136 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         This method will be called automatically during
         coordinator.async_config_entry_first_refresh.
         """
-        # await self._client.login()
         pass
 
     async def _async_update_data(self) -> IDeEnergyDataCoordinatorData:
         """Fetch data from API endpoint.
 
-        This is the place to pre-process the data to lookup tables
-        so entities can quickly look up their data.
-
         See: https://developers.home-assistant.io/docs/integration_fetching_data/
         """
-
-        # Raising 'asyncio.TimeoutError' or 'aiohttp.ClientError' are already
-        # handled by the data update coordinator.
-
-        # Raising ConfigEntryAuthFailed will cancel future updates
-        # and start a config flow with SOURCE_REAUTH (async_step_reauth)
-
-        # Raise UpdateFailed is something were wrong
-
-        active_datasets = [k for k, v in self.dataset_counter.items() if v > 0]
-        dsstr = ", ".join(active_datasets)
+        active = self.active_datasets()
+        dsstr = ", ".join(ds.name for ds in active)
         LOGGER.debug(f"[{self._client}] datasets enabled: {dsstr}")
 
-        updated_data = {}
-
-        fns = {
-            IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION: self._async_get_historical_consumption,
-            IDeEnergyCoordinatorDataSet.HISTORICAL_GENERATION: self._async_get_historical_generation,
-            IDeEnergyCoordinatorDataSet.POWER_DEMAND_PEAKS: self._async_get_power_demand_peaks,
-            IDeEnergyCoordinatorDataSet.DIRECT_READING: self._async_get_direct_reading_data,
-        }
         await self._async_call_with_reauth(self._client.renew_session)
         LOGGER.info(f"[{self._client}] session renewed")
 
-        for ds, fn in fns.items():
-            if self.dataset_counter[ds.name] > 0:
-                try:
-                    updated_data[ds] = await fn()
-                except ideenergy.ClientError:
-                    LOGGER.exception(
-                        f"[{self._client}] error updating dataset '{ds.name}'"
-                    )
-                    continue
-                if updated_data[ds] is None:
-                    LOGGER.info(
-                        f"[{self._client}] {ds.name}: dataset was not refreshed"
-                    )
-                else:
-                    LOGGER.info(f"[{self._client}] {ds.name}: dataset updated")
+        updated_data = {}
+        for ds in active:
+            if not self.is_dataset_due(ds):
+                LOGGER.debug(f"[{self._client}] {ds.name}: dataset was not refreshed")
+                continue
 
-        data = self.data | {k: v for k, v in updated_data.items() if v is not None}
-        return data
+            try:
+                updated_data[ds] = await self._async_fetch_dataset(ds)
+            except DATASET_FETCH_ERRORS as e:
+                LOGGER.warning(
+                    f"[{self._client}] error updating dataset '{ds.name}': {e}",
+                    exc_info=LOGGER.isEnabledFor(DEBUG),  # traceback only on DEBUG
+                )
+                continue
 
-    async def _async_get_direct_reading_data(self) -> dict[str, int | float]:
+            LOGGER.info(f"[{self._client}] {ds.name}: dataset updated")
+
+        return self.data | updated_data
+
+    #
+    # Refresh policy (gating + backoff)
+    #
+
+    def consecutive_failures(self, dataset: IDeEnergyCoordinatorDataSet) -> int:
+        key = DATASET_POLICIES[dataset].consecutive_failures_key
+        try:
+            return max(0, int(self._config_entry_state.data.get(key, 0)))
+        except TypeError, ValueError:
+            return 0
+
+    def is_dataset_due(self, dataset: IDeEnergyCoordinatorDataSet) -> bool:
+        """Check if dataset should be requested to i-DE in this cycle."""
+        policy = DATASET_POLICIES[dataset]
+
         if self._state_is_too_recent_with_debug(
-            key=DIRECT_READING_LAST_SUCCESS_STORED_STATE_KEY,
-            max_age=DIRECT_READING_LAST_SUCCESS_MAX_AGE,
-            label="DIRECT_READING success check",
+            key=policy.last_success_key,
+            max_age=policy.success_max_age,
+            label=f"{dataset.name} success check",
         ):
-            return None
+            return False
 
-        if self._state_is_too_recent_with_debug(
-            key=DIRECT_READING_LAST_ATTEMPT_STORED_STATE_KEY,
-            max_age=DIRECT_READING_LAST_ATTEMPT_MAX_AGE,
-            label="DIRECT_READING attempt check",
+        failures = self.consecutive_failures(dataset)
+        delay = backoff_delay(failures)
+        if delay is not None and self._state_is_too_recent_with_debug(
+            key=policy.last_attempt_key,
+            max_age=delay,
+            label=f"{dataset.name} backoff check (failures={failures})",
         ):
-            return None
+            return False
 
-        async with self._track_state_timestamps(
-            success_key=DIRECT_READING_LAST_SUCCESS_STORED_STATE_KEY,
-            attempt_key=DIRECT_READING_LAST_ATTEMPT_STORED_STATE_KEY,
-        ):
-            data = await self._async_call_with_reauth(self._client.get_measure)
+        return True
 
+    async def _async_fetch_dataset(self, dataset: IDeEnergyCoordinatorDataSet):
+        """Fetch dataset, recording success or failure in the store."""
+        try:
+            result = await self._fetchers[dataset]()
+        except Exception:
+            await self._async_record_failure(dataset)
+            raise
+
+        await self._async_record_success(dataset)
+        return result
+
+    async def _async_record_success(self, dataset: IDeEnergyCoordinatorDataSet) -> None:
+        policy = DATASET_POLICIES[dataset]
+        self._config_entry_state.data[policy.last_success_key] = self._now_ts()
+        self._config_entry_state.data[policy.consecutive_failures_key] = 0
+        await self._config_entry_state.async_save()
+
+    async def _async_record_failure(self, dataset: IDeEnergyCoordinatorDataSet) -> None:
+        policy = DATASET_POLICIES[dataset]
+        failures = self.consecutive_failures(dataset) + 1
+        self._config_entry_state.data[policy.last_attempt_key] = self._now_ts()
+        self._config_entry_state.data[policy.consecutive_failures_key] = failures
+        await self._config_entry_state.async_save()
+
+        LOGGER.warning(
+            f"[{self._client}] {dataset.name}: {failures} consecutive failure(s), "
+            + f"next attempt in {backoff_delay(failures)}"
+        )
+
+    @staticmethod
+    def _now_ts() -> float:
+        return dt_util.as_timestamp(dt_util.now())
+
+    #
+    # Fetchers
+    #
+
+    async def _async_fetch_direct_reading(self) -> dict[str, int | float]:
+        data = await self._async_call_with_reauth(self._client.get_measure)
         return {
             MEASURE_ACCUMULATED_KEY: data.accumulate,
             MEASURE_INSTANT_KEY: data.instant,
         }
 
-    async def _async_get_historical_consumption(self) -> list[HistoricalState] | None:
-        return await self._async_get_historical_generic(
-            self._client.get_historical_consumption,
-            dataset=IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION,
-            last_success_state_key=HISTORICAL_CONSUMPTION_LAST_SUCCESS_STORED_STATE_KEY,
-            last_attempt_state_key=HISTORICAL_CONSUMPTION_LAST_ATTEMPT_STORED_STATE_KEY,
-            last_attempt_max_age=HISTORICAL_CONSUMPTION_LAST_ATTEMPT_MAX_AGE,
-            last_success_max_age=HISTORICAL_CONSUMPTION_LAST_SUCCESS_MAX_AGE,
+    async def _async_fetch_historical_consumption(self) -> list[HistoricalState]:
+        return await self._async_fetch_historical(
+            self._client.get_historical_consumption
         )
 
-    async def _async_get_historical_generation(self) -> list[HistoricalState] | None:
-        return await self._async_get_historical_generic(
-            self._client.get_historical_generation,
-            dataset=IDeEnergyCoordinatorDataSet.HISTORICAL_GENERATION,
-            last_success_state_key=HISTORICAL_GENERATION_LAST_SUCCESS_STORED_STATE_KEY,
-            last_success_max_age=HISTORICAL_GENERATION_LAST_SUCCESS_MAX_AGE,
-            last_attempt_state_key=HISTORICAL_GENERATION_LAST_ATTEMPT_STORED_STATE_KEY,
-            last_attempt_max_age=HISTORICAL_GENERATION_LAST_ATTEMPT_MAX_AGE,
+    async def _async_fetch_historical_generation(self) -> list[HistoricalState]:
+        return await self._async_fetch_historical(
+            self._client.get_historical_generation
         )
 
-    async def _async_get_power_demand_peaks(self) -> list[HistoricalState] | None:
+    async def _async_fetch_power_demand_peaks(self) -> list[HistoricalState]:
         def historical_power_demand_as_historical_state(
             dai: ideenergy.DemandAtInstant,
         ) -> HistoricalState | None:
             dt = dai.dt.replace(tzinfo=LOCAL_TZ)
-            # last_reset = dai.start.replace(tzinfo=LOCAL_TZ)
 
             try:
                 return HistoricalState(
                     state=dai.value / 1000,
                     timestamp=dt_util.as_timestamp(dt),
-                    # attributes={"last_reset": last_reset},
                 )
             except Exception:
                 LOGGER.exception(f"[{self._client}] invalid DemandAtInstant '{dai!r}'")
@@ -268,42 +369,13 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         hist_states = [
             historical_power_demand_as_historical_state(dai) for dai in data.demands
         ]
-        hist_states = [hs for hs in hist_states if hs is not None]
+        return [hs for hs in hist_states if hs is not None]
 
-        return hist_states
-
-    async def _async_get_historical_generic(
-        self,
-        afn: Callable,
-        *,
-        dataset=IDeEnergyCoordinatorDataSet,
-        last_attempt_max_age: timedelta,
-        last_attempt_state_key: str,
-        last_success_max_age: timedelta,
-        last_success_state_key: str,
-    ) -> list[HistoricalState] | None:
-        if self._state_is_too_recent_with_debug(
-            key=last_success_state_key,
-            max_age=last_success_max_age,
-            label=f"{dataset.name} success check",
-        ):
-            return None
-
-        if self._state_is_too_recent_with_debug(
-            key=last_attempt_state_key,
-            max_age=last_attempt_max_age,
-            label=f"{dataset.name} attempt check",
-        ):
-            return None
-
+    async def _async_fetch_historical(self, afn: Callable) -> list[HistoricalState]:
         end = datetime.today()
         start = end - HISTORICAL_PERIOD_LENGHT
 
-        async with self._track_state_timestamps(
-            success_key=last_success_state_key,
-            attempt_key=last_attempt_state_key,
-        ):
-            data = await self._async_call_with_reauth(afn, start=start, end=end)
+        data = await self._async_call_with_reauth(afn, start=start, end=end)
 
         def as_historical_state(
             pv: ideenergy.PeriodValue,
@@ -322,8 +394,11 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
                 return None
 
         hist_states = [as_historical_state(pv) for pv in data.periods]
-        hist_states = [hs for hs in hist_states if hs is not None]
-        return hist_states
+        return [hs for hs in hist_states if hs is not None]
+
+    #
+    # Session handling
+    #
 
     async def _async_call_with_reauth[R](
         self, afn: Callable[..., Awaitable[R]], *args: Any, **kwargs: Any
@@ -348,27 +423,9 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         await self._client.login()
         return await afn(*args, **kwargs)
 
-    async def _async_save_state_timestamp(
-        self, key: str, timestamp: float | None = None
-    ) -> None:
-        ts = (
-            dt_util.as_timestamp(dt_util.now())
-            if timestamp is None
-            else float(timestamp)
-        )
-        self._config_entry_state.data[key] = ts
-        await self._config_entry_state.async_save()
-
-    @contextlib.asynccontextmanager
-    async def _track_state_timestamps(self, *, success_key: str, attempt_key: str):
-        """Context manager to track state timestamps on success/failure."""
-        try:
-            yield
-        except Exception:
-            await self._async_save_state_timestamp(attempt_key)
-            raise
-        else:
-            await self._async_save_state_timestamp(success_key)
+    #
+    # Helpers
+    #
 
     def _state_is_too_recent_with_debug(
         self, *, key: str, max_age: timedelta, label: str
@@ -420,16 +477,3 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
             )
 
         return is_too_recent
-
-
-# def period_item_with_tz_info(item):
-#     item.start = item.start.replace(tzinfo=LOCAL_TZ)
-#     item.end = item.end.replace(tzinfo=LOCAL_TZ)
-#
-#     return item
-
-
-# def dated_item_with_tz_info(item):
-#     item.dt = item.dt.replace(tzinfo=LOCAL_TZ)
-#
-#     return item
