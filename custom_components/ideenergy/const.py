@@ -28,3 +28,8 @@ CONFIG_ENTRY_VERSION = (
 DOMAIN = "ideenergy"
 LOCAL_TZ = ZoneInfo("Europe/Madrid")
 UPDATE_INTERVAL = timedelta(seconds=180)
+
+# i-DE expires server-side sessions after ~15 minutes. ideenergy 2.0.1.dev3
+# computes its local timeout as 810 *days* (timedelta(seconds * 0.9)), so it never
+# re-logins. Force a safe value; harmless with fixed library versions too.
+SESSION_TIMEOUT_OVERRIDE = timedelta(minutes=13)

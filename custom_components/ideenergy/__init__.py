@@ -27,7 +27,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.loader import async_get_loaded_integration
 
-from .const import CONF_CONTRACT, DOMAIN, UPDATE_INTERVAL
+from .const import CONF_CONTRACT, DOMAIN, SESSION_TIMEOUT_OVERRIDE, UPDATE_INTERVAL
 from .coordinator import IDeEnergyDataCoordinator
 from .data import IntegrationIDeEnergyConfigEntry, IntegrationIDeEnergyRunTimeData
 from .store import IDeEnergyConfigEntryState
@@ -135,12 +135,19 @@ def get_i_de_energy_api(hass: HomeAssistant, entry: ConfigEntry):
     else:
         ClientCls = ideenergy.Client
 
-    return ClientCls(
+    client = ClientCls(
         session=async_get_clientsession(hass),
         username=entry.data[CONF_USERNAME],
         password=entry.data[CONF_PASSWORD],
         contract=entry.data[CONF_CONTRACT],
     )
+    apply_session_timeout_workaround(client)
+    return client
+
+
+def apply_session_timeout_workaround(client: ideenergy.Client) -> None:
+    """Force a sane local session timeout (see const.SESSION_TIMEOUT_OVERRIDE)."""
+    client._session_timeout = SESSION_TIMEOUT_OVERRIDE
 
 
 def get_i_de_energy_device_info(contract_details):
