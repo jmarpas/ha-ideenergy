@@ -27,6 +27,19 @@ This integration requires an **advanced** user profile on i-DE website.
 > (5 min → 30 min → 2 h → 6 h), reauth flow and masked email in logs.
 > See [docs/fork-phase1-diagnosis.md](docs/fork-phase1-diagnosis.md).
 >
+> **Also in the fork (v3.0.0a3-jaime.2+):** *Instant Power* sensor (W, refreshed with each
+> meter reading), *Historical Consumption P1/P2/P3* statistics (2.0TD breakdown from i-DE),
+> 0 kWh hours kept, correct hours across DST changes (25 h in October / 23 h in March),
+> Spanish translation, diagnostics, and a backfill service:
+>
+> ```yaml
+> action: ideenergy.backfill_historical_consumption
+> data:
+>   config_entry_id: <your i-DE entry>
+>   start: "2025-01-01"   # i-DE keeps about two years
+>   end: "2025-12-31"     # optional, defaults to today
+> ```
+>
 > **Install the fork with HACS** (requires Home Assistant 2026.3.0 or newer):
 >
 > 1. HACS → ⋮ → *Custom repositories* → URL `https://github.com/jmarpas/ha-ideenergy`, type *Integration*.

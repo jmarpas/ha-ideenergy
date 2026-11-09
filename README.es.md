@@ -26,6 +26,20 @@ Require de un usuario **avanzado** en la página web del distribuidor.
 > dataset (5 min → 30 min → 2 h → 6 h), flujo de reautenticación y email enmascarado en logs.
 > Ver [docs/fork-phase1-diagnosis.md](docs/fork-phase1-diagnosis.md).
 >
+> **Además en el fork (v3.0.0a3-jaime.2+):** sensor de *Potencia instantánea* (W, se actualiza
+> con cada lectura del contador), estadísticas *Consumo histórico P1/P2/P3* (desglose 2.0TD
+> de i-DE), se conservan las horas a 0 kWh, horas correctas en los cambios de hora (25 h en
+> octubre / 23 h en marzo), traducción al español, diagnósticos y un servicio para rellenar
+> el histórico:
+>
+> ```yaml
+> action: ideenergy.backfill_historical_consumption
+> data:
+>   config_entry_id: <tu entrada de i-DE>
+>   start: "2025-01-01"   # i-DE guarda unos dos años
+>   end: "2025-12-31"     # opcional, por defecto hoy
+> ```
+>
 > **Instalar el fork con HACS** (requiere Home Assistant 2026.3.0 o superior):
 >
 > 1. HACS → ⋮ → *Repositorios personalizados* → URL `https://github.com/jmarpas/ha-ideenergy`, tipo *Integración*.
