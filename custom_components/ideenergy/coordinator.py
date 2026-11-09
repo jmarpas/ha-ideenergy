@@ -32,6 +32,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant_historical_sensor import HistoricalState
 
 from .const import LOCAL_TZ, UPDATE_INTERVAL
+from .historical import periods_as_historical_states
 from .store import IDeEnergyConfigEntryState
 
 LOGGER = getLogger(__name__)
@@ -413,25 +414,7 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         start = end - HISTORICAL_PERIOD_LENGHT
 
         data = await self._async_call_with_reauth(afn, start=start, end=end)
-
-        def as_historical_state(
-            pv: ideenergy.PeriodValue,
-        ) -> HistoricalState | None:
-            dt = pv.end.replace(tzinfo=LOCAL_TZ)
-            last_reset = pv.start.replace(tzinfo=LOCAL_TZ)
-
-            try:
-                return HistoricalState(
-                    state=pv.value / 1000,
-                    timestamp=dt_util.as_timestamp(dt),
-                    attributes={"last_reset": last_reset},
-                )
-            except Exception:
-                LOGGER.error(f"[{self._client}] invalid PeriodValue '{pv!r}'")
-                return None
-
-        hist_states = [as_historical_state(pv) for pv in data.periods]
-        return [hs for hs in hist_states if hs is not None]
+        return periods_as_historical_states(data.periods)
 
     #
     # Session handling

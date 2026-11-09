@@ -143,8 +143,10 @@ class IDeEnergySensor(CoordinatorEntity, HistoricalSensor, SensorEntity):
         # Filter out invalid states
         #
 
+        # 0 kWh hours are valid data (unconsolidated trailing zeros are already
+        # deferred by the coordinator); only missing values are dropped.
         n_original_hist_states = len(hist_states)
-        hist_states = [x for x in hist_states if x.state not in (0, None)]
+        hist_states = [x for x in hist_states if x.state is not None]
         if len(hist_states) != n_original_hist_states:
             LOGGER.warning(
                 f"{self.entity_id}: "
