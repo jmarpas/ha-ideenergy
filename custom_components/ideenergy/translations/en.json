@@ -30,5 +30,25 @@
         }
       }
     }
+  },
+  "services": {
+    "backfill_historical_consumption": {
+      "name": "Backfill historical consumption",
+      "description": "Downloads hourly consumption from i-DE for a date range and rewrites the statistics of the Historical Consumption sensors (total and P1/P2/P3), recomputing cumulative sums. Requests are sequential (7 days each); a full year takes a couple of minutes.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Supply point",
+          "description": "i-DE config entry (CUPS) to backfill."
+        },
+        "start": {
+          "name": "Start date",
+          "description": "First day to download (i-DE keeps about two years)."
+        },
+        "end": {
+          "name": "End date",
+          "description": "Last day to download. Defaults to today."
+        }
+      }
+    }
   }
 }

@@ -16,11 +16,10 @@
 # USA.
 
 
+import asyncio
 import itertools
-from datetime import datetime
 from functools import cached_property
 from logging import getLogger
-from math import ceil
 from typing import cast
 
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
@@ -48,8 +47,9 @@ from .coordinator import (
     IDeEnergyCoordinatorDataSet,
     IDeEnergyDataCoordinator,
 )
+from .backfill import async_rebuild_statistics
 from .data import IntegrationIDeEnergyConfigEntry
-from .historical import tariff_period_states
+from .historical import hour_start_ts, tariff_period_states
 
 PLATFORM = "sensor"
 
@@ -60,6 +60,7 @@ class IDeEnergySensor(CoordinatorEntity, HistoricalSensor, SensorEntity):
     I_DE_PLATFORM: str = PLATFORM
     I_DE_ENTITY_NAME: str
     I_DE_DATA_SET: set
+    I_DE_BACKFILL: bool = False
     coordinator: IDeEnergyDataCoordinator
 
     def __init__(
@@ -80,6 +81,10 @@ class IDeEnergySensor(CoordinatorEntity, HistoricalSensor, SensorEntity):
 
         self._attr_state_attributes = {}
 
+        # Serializes regular statistic writes and backfills (both read the
+        # last statistic and append sums after it)
+        self._statistics_lock = asyncio.Lock()
+
     @cached_property
     def unique_id(self) -> str:
         cups = dict(self.device_info["identifiers"])["cups"]
@@ -95,6 +100,9 @@ class IDeEnergySensor(CoordinatorEntity, HistoricalSensor, SensorEntity):
 
         for x in self.I_DE_DATA_SET:
             self.coordinator.activate_dataset(x)
+
+        if self.I_DE_BACKFILL:
+            self.async_on_remove(self.coordinator.register_backfill_target(self))
 
         # await self.async_update_historical()
         await self.coordinator.async_request_refresh()
@@ -115,6 +123,29 @@ class IDeEnergySensor(CoordinatorEntity, HistoricalSensor, SensorEntity):
     # It's a coordinator entity, do nothing
     async def async_update_historical(self) -> None:
         pass
+
+    async def async_write_historical(self) -> None:
+        async with self._statistics_lock:
+            await super().async_write_historical()
+
+    # ==
+    # Backfill
+    # ==
+    def backfill_states(
+        self, consumption_states: list[HistoricalState]
+    ) -> list[HistoricalState]:
+        """States this sensor stores, from total historical consumption."""
+        return consumption_states
+
+    async def async_backfill_statistics(
+        self, consumption_states: list[HistoricalState]
+    ) -> int:
+        async with self._statistics_lock:
+            return await async_rebuild_statistics(
+                self.hass,
+                self.get_statistic_metadata(),
+                self.backfill_states(consumption_states),
+            )
 
     # ==
     # Historical sensor
@@ -158,17 +189,8 @@ class IDeEnergySensor(CoordinatorEntity, HistoricalSensor, SensorEntity):
         # Group historical states by hour block
         #
 
-        def hour_block_for_hist_state(hist_state: HistoricalState) -> datetime:
-            secs_per_hour = 60 * 60
-
-            ts = ceil(hist_state.timestamp)
-            block = ts // secs_per_hour
-            leftover = ts % secs_per_hour
-
-            if leftover == 0:
-                block = block - 1
-
-            return block * secs_per_hour
+        def hour_block_for_hist_state(hist_state: HistoricalState) -> float:
+            return hour_start_ts(hist_state.timestamp)
 
         latest = await hass_get_last_statistic(self.hass, self.get_statistic_metadata())
 
@@ -345,6 +367,7 @@ class HistoricalConsumption(IDeEnergySensor):
     I_DE_PLATFORM = PLATFORM
     I_DE_ENTITY_NAME = "Historical Consumption"
     I_DE_DATA_SET = {IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION}
+    I_DE_BACKFILL = True
 
     def get_statistic_metadata(self):
         meta = super().get_statistic_metadata()
@@ -373,6 +396,11 @@ class HistoricalConsumptionTariffPeriod(HistoricalConsumption):
             return None
 
         return tariff_period_states(states, self.I_DE_TARIFF_PERIOD)
+
+    def backfill_states(
+        self, consumption_states: list[HistoricalState]
+    ) -> list[HistoricalState]:
+        return tariff_period_states(consumption_states, self.I_DE_TARIFF_PERIOD)
 
 
 class HistoricalConsumptionP1(HistoricalConsumptionTariffPeriod):

@@ -23,6 +23,7 @@ import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from logging import getLogger
+from math import ceil
 
 import ideenergy
 from homeassistant.util import dt as dt_util
@@ -83,6 +84,17 @@ def drop_trailing_zeros(hist_states: list[HistoricalState]) -> list[HistoricalSt
     return hist_states[: last_nonzero + 1]
 
 
+def hour_start_ts(end_timestamp: float) -> float:
+    """Start of the hour a state belongs to (states are stamped at hour end)."""
+    secs = ONE_HOUR.total_seconds()
+    ts = ceil(end_timestamp)
+    block = ts // secs
+    if ts % secs == 0:
+        block -= 1
+
+    return block * secs
+
+
 def hour_index(pv: ideenergy.PeriodValue, day0: datetime) -> int:
     """Position of the period in the i-DE series (0 = first hour of day0)."""
     return int((pv.start - day0) / ONE_HOUR)
@@ -110,6 +122,7 @@ def periods_as_historical_states(
     *,
     day0: datetime | None = None,
     now: datetime | None = None,
+    defer_trailing_zeros: bool = True,
 ) -> list[HistoricalState]:
     """Convert i-DE periods (Wh, naive local datetimes) into kWh states.
 
@@ -148,7 +161,7 @@ def periods_as_historical_states(
         ret.append(HistoricalState(state=kwh, timestamp=end_ts, attributes=attributes))
 
     ret.sort(key=lambda hs: hs.timestamp)
-    return drop_trailing_zeros(ret)
+    return drop_trailing_zeros(ret) if defer_trailing_zeros else ret
 
 
 def tariff_period_states(

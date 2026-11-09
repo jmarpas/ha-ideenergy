@@ -17,10 +17,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from logging import DEBUG, getLogger
 from typing import Any
 
@@ -32,7 +33,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant_historical_sensor import HistoricalState
 
 from .const import LOCAL_TZ, UPDATE_INTERVAL
-from .historical import periods_as_historical_states
+from .historical import drop_trailing_zeros, periods_as_historical_states
 from .store import IDeEnergyConfigEntryState
 
 LOGGER = getLogger(__name__)
@@ -72,6 +73,10 @@ MEASURE_ACCUMULATED_KEY = "measure_accumulated"
 MEASURE_INSTANT_KEY = "measure_instant"
 
 HISTORICAL_PERIOD_LENGHT = timedelta(days=7)
+
+# Backfill: same window size as regular refreshes, sequential and paced
+BACKFILL_CHUNK = HISTORICAL_PERIOD_LENGHT
+BACKFILL_REQUEST_DELAY = timedelta(seconds=2)
 
 # Wait time before retrying a dataset after N consecutive failures:
 # 1 failure -> 5 min, 2 -> 30 min, 3 -> 2 h, 4 or more -> 6 h
@@ -191,6 +196,7 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
 
         self._client = client
         self._config_entry_state = config_entry_state
+        self._backfill_targets: list[Any] = []
         self._fetchers: dict[IDeEnergyCoordinatorDataSet, Callable[[], Awaitable]] = {
             IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION: self._async_fetch_historical_consumption,
             IDeEnergyCoordinatorDataSet.HISTORICAL_GENERATION: self._async_fetch_historical_generation,
@@ -419,6 +425,59 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
 
         data = await self._async_call_with_reauth(afn, start=start, end=end)
         return periods_as_historical_states(data.periods, day0=start)
+
+    #
+    # Backfill
+    #
+
+    def register_backfill_target(self, entity: Any) -> Callable[[], None]:
+        """Register a sensor able to backfill historical consumption."""
+        self._backfill_targets.append(entity)
+        return lambda: self._backfill_targets.remove(entity)
+
+    @property
+    def backfill_targets(self) -> list[Any]:
+        return list(self._backfill_targets)
+
+    async def async_fetch_historical_consumption_range(
+        self, start: date, end: date
+    ) -> list[HistoricalState]:
+        """Download hourly consumption for [start, end] in small chunks.
+
+        Requests are sequential with a pause between them to be gentle with
+        i-DE. Overlapping hours (chunks get a 1 h safety margin) are deduped.
+        """
+        await self._async_ensure_logged()
+
+        by_ts: dict[float, HistoricalState] = {}
+        chunk_start = datetime.combine(start, time.min)
+        range_end = datetime.combine(end + timedelta(days=1), time.min)
+        range_end_ts = dt_util.as_timestamp(range_end.replace(tzinfo=LOCAL_TZ))
+
+        while chunk_start < range_end:
+            chunk_end = min(chunk_start + BACKFILL_CHUNK, range_end)
+            LOGGER.info(
+                f"[{self._client}] backfill: requesting {chunk_start:%Y-%m-%d} "
+                + f"- {chunk_end:%Y-%m-%d}"
+            )
+            # +1 h margin: ideenergy filters by naive 'end', which drops the
+            # last hour of a 25 h (October) day otherwise.
+            data = await self._async_call_with_reauth(
+                self._client.get_historical_consumption,
+                start=chunk_start,
+                end=chunk_end + timedelta(hours=1),
+            )
+            for hs in periods_as_historical_states(
+                data.periods, day0=chunk_start, defer_trailing_zeros=False
+            ):
+                if hs.timestamp <= range_end_ts:
+                    by_ts[hs.timestamp] = hs
+
+            chunk_start = chunk_end
+            if chunk_start < range_end:
+                await asyncio.sleep(BACKFILL_REQUEST_DELAY.total_seconds())
+
+        return drop_trailing_zeros([by_ts[ts] for ts in sorted(by_ts)])
 
     #
     # Session handling
