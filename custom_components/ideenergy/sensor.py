@@ -397,6 +397,14 @@ class HistoricalConsumptionTariffPeriod(HistoricalConsumption):
 
         return tariff_period_states(states, self.I_DE_TARIFF_PERIOD)
 
+    async def async_write_historical(self) -> None:
+        # Tariffs without breakdown would log a warning on every refresh
+        if not self.historical_states:
+            LOGGER.debug(f"{self.entity_id}: no tariff period breakdown available")
+            return
+
+        await super().async_write_historical()
+
     def backfill_states(
         self, consumption_states: list[HistoricalState]
     ) -> list[HistoricalState]:
