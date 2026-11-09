@@ -79,3 +79,68 @@ def test_zero_like_values_are_zero(value):
     states = periods_as_historical_states(periods([100, value, 100]), now=NOW)
 
     assert states[1].state == 0.0
+
+
+#
+# DST changes (Europe/Madrid)
+#
+
+FALL_BACK_DAY = datetime(2026, 10, 25)  # 25 hours: 02:00-03:00 happens twice
+SPRING_FORWARD_DAY = datetime(2026, 3, 29)  # 23 hours: 02:00-03:00 skipped
+
+
+def assert_consecutive_hours(states):
+    diffs = {b.timestamp - a.timestamp for a, b in zip(states, states[1:])}
+    assert diffs == {3600}
+
+
+def test_october_fold_day_has_25_distinct_hours():
+    states = periods_as_historical_states(
+        periods(range(1, 26), day0=FALL_BACK_DAY), day0=FALL_BACK_DAY, now=NOW
+    )
+
+    assert len(states) == 25
+    assert_consecutive_hours(states)
+    assert local_hours(states)[:4] == ["01:00", "02:00", "02:00", "03:00"]
+    last = datetime.fromtimestamp(states[-1].timestamp, LOCAL_TZ)
+    assert last == datetime(2026, 10, 26, 0, 0, tzinfo=LOCAL_TZ)
+    # Both 02:00-03:00 hours keep their own value instead of being merged
+    assert [hs.state for hs in states[2:4]] == [0.003, 0.004]
+
+
+def test_october_fold_last_reset_marks_both_repeated_hours():
+    states = periods_as_historical_states(
+        periods(range(1, 26), day0=FALL_BACK_DAY), day0=FALL_BACK_DAY, now=NOW
+    )
+
+    first, second = states[2].attributes["last_reset"], states[3].attributes[
+        "last_reset"
+    ]
+    assert first.strftime("%H:%M %Z") == "02:00 CEST"
+    assert second.strftime("%H:%M %Z") == "02:00 CET"
+
+
+def test_march_spring_forward_day_has_23_hours():
+    states = periods_as_historical_states(
+        periods([100] * 23, day0=SPRING_FORWARD_DAY),
+        day0=SPRING_FORWARD_DAY,
+        now=NOW,
+    )
+
+    assert len(states) == 23
+    assert_consecutive_hours(states)
+    assert local_hours(states)[:3] == ["01:00", "03:00", "04:00"]
+    last = datetime.fromtimestamp(states[-1].timestamp, LOCAL_TZ)
+    assert last == datetime(2026, 3, 30, 0, 0, tzinfo=LOCAL_TZ)
+
+
+def test_week_spanning_fold_keeps_following_days_aligned():
+    day0 = datetime(2026, 10, 24)
+    states = periods_as_historical_states(
+        periods([100] * (24 + 25 + 24), day0=day0), day0=day0, now=NOW
+    )
+
+    assert len(states) == 73
+    assert_consecutive_hours(states)
+    last = datetime.fromtimestamp(states[-1].timestamp, LOCAL_TZ)
+    assert last == datetime(2026, 10, 27, 0, 0, tzinfo=LOCAL_TZ)

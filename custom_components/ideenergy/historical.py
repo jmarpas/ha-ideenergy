@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 from logging import getLogger
 
 import ideenergy
@@ -32,6 +32,7 @@ from .const import LOCAL_TZ
 LOGGER = getLogger(__name__)
 
 WH_PER_KWH = 1000
+ONE_HOUR = timedelta(hours=1)
 
 
 def _as_kwh(value) -> float | None:
@@ -59,17 +60,50 @@ def drop_trailing_zeros(hist_states: list[HistoricalState]) -> list[HistoricalSt
     return hist_states[: last_nonzero + 1]
 
 
+def hour_index(pv: ideenergy.PeriodValue, day0: datetime) -> int:
+    """Position of the period in the i-DE series (0 = first hour of day0)."""
+    return int((pv.start - day0) / ONE_HOUR)
+
+
+def period_utc_bounds(
+    pv: ideenergy.PeriodValue, day0: datetime
+) -> tuple[datetime, datetime]:
+    """Real (UTC) start/end of an i-DE hourly period.
+
+    i-DE returns one value per real hour starting at day0 local midnight: 23
+    values on the last Sunday of March and 25 on the last Sunday of October.
+    ideenergy builds naive datetimes as `day0 + idx hours`, which is wrong
+    after a DST change (the repeated 02:00-03:00 in October would collide and
+    every later hour would be shifted). Rebuild the instant from the index
+    using absolute (UTC) arithmetic instead.
+    """
+    day0_utc = dt_util.as_utc(day0.replace(tzinfo=LOCAL_TZ))
+    start = day0_utc + hour_index(pv, day0) * ONE_HOUR
+    return start, start + ONE_HOUR
+
+
 def periods_as_historical_states(
     periods: Iterable[ideenergy.PeriodValue],
     *,
+    day0: datetime | None = None,
     now: datetime | None = None,
 ) -> list[HistoricalState]:
     """Convert i-DE periods (Wh, naive local datetimes) into kWh states.
 
-    The state timestamp is the end of the hour. Hours without a numeric value
-    or ending in the future are skipped, 0 kWh hours are kept (see
-    drop_trailing_zeros).
+    `day0` is the naive local midnight the i-DE series starts at (the
+    requested start date). The state timestamp is the end of the hour. Hours
+    without a numeric value or ending in the future are skipped, 0 kWh hours
+    are kept (see drop_trailing_zeros).
     """
+    periods = list(periods)
+    if not periods:
+        return []
+
+    if day0 is None:
+        day0 = min(pv.start for pv in periods).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+
     now_ts = dt_util.as_timestamp(now or dt_util.now())
 
     ret = []
@@ -79,7 +113,8 @@ def periods_as_historical_states(
             LOGGER.debug(f"skipping period without value: {pv!r}")
             continue
 
-        end_ts = dt_util.as_timestamp(pv.end.replace(tzinfo=LOCAL_TZ))
+        start, end = period_utc_bounds(pv, day0)
+        end_ts = dt_util.as_timestamp(end)
         if end_ts > now_ts:
             continue
 
@@ -87,7 +122,7 @@ def periods_as_historical_states(
             HistoricalState(
                 state=kwh,
                 timestamp=end_ts,
-                attributes={"last_reset": pv.start.replace(tzinfo=LOCAL_TZ)},
+                attributes={"last_reset": start.astimezone(LOCAL_TZ)},
             )
         )
 

@@ -410,11 +410,15 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         return [hs for hs in hist_states if hs is not None]
 
     async def _async_fetch_historical(self, afn: Callable) -> list[HistoricalState]:
-        end = datetime.today()
-        start = end - HISTORICAL_PERIOD_LENGHT
+        end = datetime.now()
+        # Start at local midnight: i-DE series are indexed from day start,
+        # which is needed to place hours correctly around DST changes.
+        start = (end - HISTORICAL_PERIOD_LENGHT).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
 
         data = await self._async_call_with_reauth(afn, start=start, end=end)
-        return periods_as_historical_states(data.periods)
+        return periods_as_historical_states(data.periods, day0=start)
 
     #
     # Session handling
