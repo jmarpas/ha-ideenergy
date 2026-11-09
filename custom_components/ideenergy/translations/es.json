@@ -1,0 +1,81 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Este punto de suministro (CUPS) ya está configurado",
+      "reauth_successful": "Reautenticación completada"
+    },
+    "error": {
+      "cannot_connect": "No se pudo conectar con i-DE",
+      "invalid_auth": "Usuario o contraseña incorrectos",
+      "unknown": "Error inesperado"
+    },
+    "step": {
+      "user": {
+        "title": "Acceso a i-DE (Iberdrola Distribución)",
+        "data": {
+          "name": "Nombre",
+          "username": "Usuario (email)",
+          "password": "Contraseña"
+        }
+      },
+      "contract": {
+        "title": "Punto de suministro",
+        "data": {
+          "contract": "Contrato"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reautenticar la integración",
+        "description": "i-DE ha rechazado las credenciales guardadas para {username}. Introduce la contraseña actual.",
+        "data": {
+          "password": "Contraseña"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "accumulated_consumption": {
+        "name": "Consumo acumulado"
+      },
+      "instant_power": {
+        "name": "Potencia instantánea"
+      },
+      "historical_consumption": {
+        "name": "Consumo histórico"
+      },
+      "historical_consumption_p1": {
+        "name": "Consumo histórico P1 (punta)"
+      },
+      "historical_consumption_p2": {
+        "name": "Consumo histórico P2 (llano)"
+      },
+      "historical_consumption_p3": {
+        "name": "Consumo histórico P3 (valle)"
+      },
+      "historical_generation": {
+        "name": "Generación histórica"
+      }
+    }
+  },
+  "services": {
+    "backfill_historical_consumption": {
+      "name": "Rellenar histórico de consumo",
+      "description": "Descarga de i-DE el consumo horario de un rango de fechas y reescribe las estadísticas de los sensores de consumo histórico (total y P1/P2/P3), recalculando las sumas acumuladas. Las peticiones son secuenciales (7 días cada una); un año completo tarda un par de minutos.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Punto de suministro",
+          "description": "Entrada de i-DE (CUPS) a rellenar."
+        },
+        "start": {
+          "name": "Fecha de inicio",
+          "description": "Primer día a descargar (i-DE guarda unos dos años)."
+        },
+        "end": {
+          "name": "Fecha de fin",
+          "description": "Último día a descargar. Por defecto, hoy."
+        }
+      }
+    }
+  }
+}

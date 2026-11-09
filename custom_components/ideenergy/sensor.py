@@ -72,7 +72,7 @@ class IDeEnergySensor(CoordinatorEntity, HistoricalSensor, SensorEntity):
         super().__init__(*args, **kwargs)
 
         self._attr_has_entity_name = True
-        self._attr_name = self.I_DE_ENTITY_NAME
+        self._attr_translation_key = slugify(self.I_DE_ENTITY_NAME, separator="_")
         self._attr_device_info = device_info
 
         self._attr_unique_id = _build_entity_unique_id(
@@ -261,7 +261,7 @@ class AccumulatedConsumption(RestoreSensor, CoordinatorEntity, SensorEntity):
         super().__init__(*args, **kwargs)
 
         self._attr_has_entity_name = True
-        self._attr_name = self.I_DE_ENTITY_NAME
+        self._attr_translation_key = slugify(self.I_DE_ENTITY_NAME, separator="_")
         self._attr_unique_id = _build_entity_unique_id(
             device_info, self.I_DE_ENTITY_NAME
         )
@@ -329,7 +329,7 @@ class InstantPower(RestoreSensor, CoordinatorEntity, SensorEntity):
         super().__init__(*args, **kwargs)
 
         self._attr_has_entity_name = True
-        self._attr_name = self.I_DE_ENTITY_NAME
+        self._attr_translation_key = slugify(self.I_DE_ENTITY_NAME, separator="_")
         self._attr_unique_id = _build_entity_unique_id(
             device_info, self.I_DE_ENTITY_NAME
         )

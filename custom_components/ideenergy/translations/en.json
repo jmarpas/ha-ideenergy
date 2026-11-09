@@ -50,5 +50,30 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "accumulated_consumption": {
+        "name": "Accumulated Consumption"
+      },
+      "instant_power": {
+        "name": "Instant Power"
+      },
+      "historical_consumption": {
+        "name": "Historical Consumption"
+      },
+      "historical_consumption_p1": {
+        "name": "Historical Consumption P1"
+      },
+      "historical_consumption_p2": {
+        "name": "Historical Consumption P2"
+      },
+      "historical_consumption_p3": {
+        "name": "Historical Consumption P3"
+      },
+      "historical_generation": {
+        "name": "Historical Generation"
+      }
+    }
   }
 }
