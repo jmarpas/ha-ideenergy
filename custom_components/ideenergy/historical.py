@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from logging import getLogger
@@ -33,6 +34,8 @@ LOGGER = getLogger(__name__)
 
 WH_PER_KWH = 1000
 ONE_HOUR = timedelta(hours=1)
+TARIFF_PERIOD_RE = re.compile(r"P\d")
+TARIFF_PERIODS_ATTR = "tariff_periods"
 
 
 def _as_kwh(value) -> float | None:
@@ -40,6 +43,26 @@ def _as_kwh(value) -> float | None:
         return float(value) / WH_PER_KWH
     except TypeError, ValueError:
         return None
+
+
+def tariff_periods_kwh(pv: ideenergy.PeriodValue) -> dict[str, float]:
+    """Per tariff period breakdown (P1, P2, ...) of an hour, in kWh.
+
+    i-DE returns the breakdown in the order of its 'periodos' list (P1 first).
+    Names are normalized to P<n> by position unless they already are.
+    """
+    desglosed = getattr(pv, "desglosed", None) or {}
+
+    ret = {}
+    for idx, (name, value) in enumerate(desglosed.items()):
+        kwh = _as_kwh(value)
+        if kwh is None:
+            continue
+
+        key = name if TARIFF_PERIOD_RE.fullmatch(str(name)) else f"P{idx + 1}"
+        ret[key] = kwh
+
+    return ret
 
 
 def drop_trailing_zeros(hist_states: list[HistoricalState]) -> list[HistoricalState]:
@@ -118,13 +141,36 @@ def periods_as_historical_states(
         if end_ts > now_ts:
             continue
 
-        ret.append(
-            HistoricalState(
-                state=kwh,
-                timestamp=end_ts,
-                attributes={"last_reset": start.astimezone(LOCAL_TZ)},
-            )
-        )
+        attributes = {"last_reset": start.astimezone(LOCAL_TZ)}
+        if tariff_periods := tariff_periods_kwh(pv):
+            attributes[TARIFF_PERIODS_ATTR] = tariff_periods
+
+        ret.append(HistoricalState(state=kwh, timestamp=end_ts, attributes=attributes))
 
     ret.sort(key=lambda hs: hs.timestamp)
     return drop_trailing_zeros(ret)
+
+
+def tariff_period_states(
+    hist_states: Iterable[HistoricalState], period: str
+) -> list[HistoricalState]:
+    """Project total consumption states onto a single tariff period.
+
+    Hours without breakdown are skipped; hours where the period is not
+    active are 0 kWh (needed for a continuous cumulative sum).
+    """
+    ret = []
+    for hs in hist_states:
+        breakdown = (hs.attributes or {}).get(TARIFF_PERIODS_ATTR)
+        if not breakdown:
+            continue
+
+        ret.append(
+            HistoricalState(
+                state=breakdown.get(period, 0.0),
+                timestamp=hs.timestamp,
+                attributes={"last_reset": hs.attributes["last_reset"]},
+            )
+        )
+
+    return ret

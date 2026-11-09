@@ -8,7 +8,10 @@ import ideenergy
 import pytest
 
 from custom_components.ideenergy.const import LOCAL_TZ
-from custom_components.ideenergy.historical import periods_as_historical_states
+from custom_components.ideenergy.historical import (
+    periods_as_historical_states,
+    tariff_period_states,
+)
 
 DAY0 = datetime(2026, 11, 2)  # naive local midnight, no DST change
 NOW = datetime(2026, 11, 9, 12, 0, tzinfo=LOCAL_TZ)
@@ -144,3 +147,65 @@ def test_week_spanning_fold_keeps_following_days_aligned():
     assert_consecutive_hours(states)
     last = datetime.fromtimestamp(states[-1].timestamp, LOCAL_TZ)
     assert last == datetime(2026, 10, 27, 0, 0, tzinfo=LOCAL_TZ)
+
+
+#
+# 2.0TD tariff periods
+#
+
+
+def consumption_periods(rows, day0=DAY0):
+    """rows: list of (total_wh, {period_name: wh})"""
+    return [
+        ideenergy.ConsumptionForPeriod(
+            start=day0 + timedelta(hours=idx),
+            end=day0 + timedelta(hours=idx + 1),
+            value=total,
+            desglosed=breakdown,
+        )
+        for idx, (total, breakdown) in enumerate(rows)
+    ]
+
+
+def test_tariff_breakdown_is_attached_in_kwh():
+    rows = [(300, {"P1": 0, "P2": 0, "P3": 300}), (500, {"P1": 500, "P2": 0, "P3": 0})]
+    states = periods_as_historical_states(consumption_periods(rows), now=NOW)
+
+    assert states[0].attributes["tariff_periods"] == {"P1": 0.0, "P2": 0.0, "P3": 0.3}
+    assert states[1].attributes["tariff_periods"]["P1"] == 0.5
+
+
+def test_tariff_period_names_are_normalized_by_position():
+    rows = [(300, {"Punta": 100, "Llano": 200, "Valle": 0})]
+    states = periods_as_historical_states(consumption_periods(rows), now=NOW)
+
+    assert states[0].attributes["tariff_periods"] == {"P1": 0.1, "P2": 0.2, "P3": 0.0}
+
+
+def test_tariff_period_projection_keeps_zero_hours():
+    rows = [
+        (300, {"P1": 0, "P2": 0, "P3": 300}),
+        (500, {"P1": 500, "P2": 0, "P3": 0}),
+        (200, {"P1": 0, "P2": 200, "P3": 0}),
+    ]
+    states = periods_as_historical_states(consumption_periods(rows), now=NOW)
+
+    assert [hs.state for hs in tariff_period_states(states, "P1")] == [0.0, 0.5, 0.0]
+    assert [hs.state for hs in tariff_period_states(states, "P3")] == [0.3, 0.0, 0.0]
+    assert [hs.timestamp for hs in tariff_period_states(states, "P2")] == [
+        hs.timestamp for hs in states
+    ]
+
+
+def test_tariff_period_projection_skips_hours_without_breakdown():
+    rows = [(300, {}), (500, {"P1": 500, "P2": 0, "P3": 0})]
+    states = periods_as_historical_states(consumption_periods(rows), now=NOW)
+
+    assert len(tariff_period_states(states, "P1")) == 1
+
+
+def test_generation_periods_have_no_breakdown():
+    states = periods_as_historical_states(periods([100]), now=NOW)
+
+    assert "tariff_periods" not in states[0].attributes
+    assert tariff_period_states(states, "P1") == []

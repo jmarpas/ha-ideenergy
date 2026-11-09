@@ -49,6 +49,7 @@ from .coordinator import (
     IDeEnergyDataCoordinator,
 )
 from .data import IntegrationIDeEnergyConfigEntry
+from .historical import tariff_period_states
 
 PLATFORM = "sensor"
 
@@ -356,6 +357,39 @@ class HistoricalConsumption(IDeEnergySensor):
         return self.coordinator.data[IDeEnergyCoordinatorDataSet.HISTORICAL_CONSUMPTION]
 
 
+class HistoricalConsumptionTariffPeriod(HistoricalConsumption):
+    """Hourly consumption of a single 2.0TD tariff period (P1/P2/P3).
+
+    Uses the breakdown i-DE sends with the historical consumption, so no
+    extra requests are made and holidays/weekends follow i-DE's calendar.
+    """
+
+    I_DE_TARIFF_PERIOD: str
+
+    @property
+    def historical_states(self) -> list[HistoricalState] | None:
+        states = super().historical_states
+        if states is None:
+            return None
+
+        return tariff_period_states(states, self.I_DE_TARIFF_PERIOD)
+
+
+class HistoricalConsumptionP1(HistoricalConsumptionTariffPeriod):
+    I_DE_ENTITY_NAME = "Historical Consumption P1"
+    I_DE_TARIFF_PERIOD = "P1"
+
+
+class HistoricalConsumptionP2(HistoricalConsumptionTariffPeriod):
+    I_DE_ENTITY_NAME = "Historical Consumption P2"
+    I_DE_TARIFF_PERIOD = "P2"
+
+
+class HistoricalConsumptionP3(HistoricalConsumptionTariffPeriod):
+    I_DE_ENTITY_NAME = "Historical Consumption P3"
+    I_DE_TARIFF_PERIOD = "P3"
+
+
 class HistoricalGeneration(IDeEnergySensor):
     I_DE_PLATFORM = PLATFORM
     I_DE_ENTITY_NAME = "Historical Generation"
@@ -422,6 +456,9 @@ async def async_setup_entry(
         AccumulatedConsumption,
         InstantPower,
         HistoricalConsumption,
+        HistoricalConsumptionP1,
+        HistoricalConsumptionP2,
+        HistoricalConsumptionP3,
         HistoricalGeneration,
     ]
     async_add_entities(
