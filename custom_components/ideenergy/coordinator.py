@@ -227,6 +227,14 @@ class IDeEnergyDataCoordinator(DataUpdateCoordinator[IDeEnergyDataCoordinatorDat
         if self.dataset_counter[dataset.name] == 0:
             LOGGER.info(f"[{self._client}] dataset {dataset.name} disabled")
 
+    @property
+    def client(self) -> ideenergy.Client:
+        return self._client
+
+    @property
+    def config_entry_state(self) -> IDeEnergyConfigEntryState:
+        return self._config_entry_state
+
     def active_datasets(self) -> list[IDeEnergyCoordinatorDataSet]:
         return [ds for ds in DATASET_FETCH_ORDER if self.dataset_counter[ds.name] > 0]
 
