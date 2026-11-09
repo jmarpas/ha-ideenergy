@@ -30,7 +30,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfEnergy
+from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant, callback, dt_util
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -44,6 +44,7 @@ from homeassistant_historical_sensor import (
 
 from .coordinator import (
     MEASURE_ACCUMULATED_KEY,
+    MEASURE_INSTANT_KEY,
     IDeEnergyCoordinatorDataSet,
     IDeEnergyDataCoordinator,
 )
@@ -281,6 +282,62 @@ class AccumulatedConsumption(RestoreSensor, CoordinatorEntity, SensorEntity):
         await super().async_will_remove_from_hass()
 
 
+class InstantPower(RestoreSensor, CoordinatorEntity, SensorEntity):
+    """Instant power demand reported by the meter (ICP) with each direct reading.
+
+    i-DE only provides it when the meter is polled (DIRECT_READING dataset), so
+    it refreshes at the same pace as Accumulated Consumption.
+    """
+
+    I_DE_PLATFORM = PLATFORM
+    I_DE_ENTITY_NAME = "Instant Power"
+    I_DE_DATA_SET = {IDeEnergyCoordinatorDataSet.DIRECT_READING}
+
+    coordinator: IDeEnergyDataCoordinator
+
+    def __init__(
+        self,
+        *args,
+        device_info: DeviceInfo,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+        self._attr_has_entity_name = True
+        self._attr_name = self.I_DE_ENTITY_NAME
+        self._attr_unique_id = _build_entity_unique_id(
+            device_info, self.I_DE_ENTITY_NAME
+        )
+        self._attr_device_class = SensorDeviceClass.POWER
+        self._attr_device_info = device_info
+        self._attr_native_unit_of_measurement = UnitOfPower.WATT
+        self._attr_native_value = None
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        reading = self.coordinator.data.get(IDeEnergyCoordinatorDataSet.DIRECT_READING)
+        if reading and reading.get(MEASURE_INSTANT_KEY) is not None:
+            self._attr_native_value = reading[MEASURE_INSTANT_KEY]
+            self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        prev = await self.async_get_last_sensor_data()
+        if prev is not None and prev.native_value is not None:
+            self._attr_native_value = prev.native_value
+
+        for x in self.I_DE_DATA_SET:
+            self.coordinator.activate_dataset(x)
+
+    async def async_will_remove_from_hass(self) -> None:
+        for x in self.I_DE_DATA_SET:
+            self.coordinator.deactivate_dataset(x)
+
+        await super().async_will_remove_from_hass()
+
+
 class HistoricalConsumption(IDeEnergySensor):
     I_DE_PLATFORM = PLATFORM
     I_DE_ENTITY_NAME = "Historical Consumption"
@@ -359,7 +416,12 @@ async def async_setup_entry(
     entry: IntegrationIDeEnergyConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    IDeClasses = [AccumulatedConsumption, HistoricalConsumption, HistoricalGeneration]
+    IDeClasses = [
+        AccumulatedConsumption,
+        InstantPower,
+        HistoricalConsumption,
+        HistoricalGeneration,
+    ]
     async_add_entities(
         [
             IDeClass(
